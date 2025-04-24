@@ -59,11 +59,11 @@ const LocalGaslessSwapRouterAddress = "0x5FC8d32690cc91D4c39d9d3abcBD16989F87570
 
 /**
  * Get the gasless swap router for the specified chain
+ * @param web3 The web3 instance 
  * @param chainId The chain ID
- * @param web3 The web3 instance
  * @returns The gasless swap router contract
  */
-export function getGaslessSwapRouter(chainId: number, web3: Web3): any {
+export function getGaslessSwapRouter(web3: Web3, chainId: number): any {
     const MAINNET_CHAIN_ID = 8217; // Kaia mainnet
     const KAIROS_CHAIN_ID = 1001; // Kaia testnet (Kairos)
     const LOCAL = 1000;
@@ -160,13 +160,12 @@ export async function getApproveRawTx(
     privateKey: HexString
 ): Promise<string> {
     try {
-        const chainId = Number(web3.eth.getChainId());
-
-        const gsr = getGaslessSwapRouter(chainId, web3);
+        const chainId = await web3.eth.getChainId();
+        const gsr = getGaslessSwapRouter(web3, Number(chainId));
 
         const tokenAbi = [{
             "constant":true,
-            "inputs":[{"name":"spender","type":"address"}],
+            "inputs":[{"name":"spender","type":"address"}, {"name":"amount","type":"uint256"}],
             "name":"approve",
             "outputs":[{"name":"","type":"bool"}],
             "type":"function"
@@ -182,18 +181,18 @@ export async function getApproveRawTx(
             throw new Error("Amount must be greater than 0");
         }
 
-        const approveData = tokenContract.methods.approve(gsr.address, amountBN.toString()).encodeABI();
+        const approveData = tokenContract.methods.approve(gsr.options.address, amountBN).encodeABI();
 
         const sender = await web3.eth.accounts.privateKeyToAccount(privateKey);
         const nonce = await web3.eth.getTransactionCount(sender.address);
-        const gasPriceBN = await web3.eth.getGasPrice?.toString() || "25000000000";
+        const gasPriceBN = await web3.eth.getGasPrice();
 
         const tx = {
             type: 0,
             to: tokenAddr,
             nonce: nonce,
             gasLimit: 100000,
-            gasPrice: gasPriceBN,
+            gasPrice: gasPriceBN || "25000000000",
             data: approveData,
             value: "0",
             chainId: chainId,
@@ -230,9 +229,8 @@ export async function getSwapRawTx(
     privateKey: HexString
 ): Promise<string> {
     try {
-        const chainId = Number(web3.eth.getChainId());
-
-        const gsr = getGaslessSwapRouter(chainId, web3);
+        const chainId = await web3.eth.getChainId();
+        const gsr = getGaslessSwapRouter(web3, Number(chainId));
 
         const currentBlock = await web3.eth.getBlock("latest");
         if (!currentBlock) {
@@ -246,11 +244,11 @@ export async function getSwapRawTx(
             "name": "swapForGas",
             "outputs": [],
             "type": "function"
-    }];
+        }];
 
         const routerContract = new web3.eth.Contract(
             routerAbi,
-            gsr.address
+            gsr.options.address
         );
 
         const swapData = routerContract.methods.swapForGas(
@@ -266,18 +264,19 @@ export async function getSwapRawTx(
         const nonceIncrement = isSingle ? 0n : 1n;
         const nonce = baseNonce + nonceIncrement;
 
-        const gasPriceBN = await web3.eth.getGasPrice?.toString() || "25000000000";
+        const gasPriceBN = await web3.eth.getGasPrice();
 
         const tx = {
             type: 0,
-            to: gsr.address,
+            to: gsr.options.address,
             nonce: nonce,
             gasLimit: 500000,
-            gasPrice: gasPriceBN,
+            gasPrice: gasPriceBN || "25000000000",
             data: swapData,
             value: 0,
             chainId: chainId,
         };
+        console.log(tx);
 
         const signResult = await sender.signTransaction(tx)
         return signResult.rawTransaction
@@ -343,7 +342,7 @@ export async function isGaslessSupportedToken(
     chainId: number
 ): Promise<boolean> {
     try {
-        const gsr = getGaslessSwapRouter(chainId, web3);
+        const gsr = getGaslessSwapRouter(web3, chainId);
 
         return await gsr.methods.isTokenSupported(token).call();
     } catch (error) {
@@ -390,9 +389,9 @@ export async function isGaslessApprove(
         const amountData = "0x" + data.slice(74);
 
         // A3: spender is a whitelisted GaslessSwapRouter.
-        const router = getGaslessSwapRouter(chainId, web3);
+        const router = getGaslessSwapRouter(web3, chainId);
 
-        if (spenderData.toLowerCase() !== router.address.toLowerCase()) {
+        if (spenderData.toLowerCase() !== router.options.address.toLowerCase()) {
             return false;
         }
 
@@ -437,24 +436,22 @@ export async function isGaslessSwap(
         const swapTxRequest = await getTransactionRequest(swapTx);
 
         if (!swapTxRequest.data || !swapTxRequest.to) {
-            console.log("!swapTxRequest.data || !swapTxRequest.to")
             return false;
         }
 
         // S1: GaslessSwapTx.to is a whitelisted GaslessSwapRouter.
-        const router = getGaslessSwapRouter(chainId, web3);
+        const router = getGaslessSwapRouter(web3, chainId);
 
-        if (swapTxRequest.to.toLowerCase() !== router.address.toLowerCase()) {
+        if (swapTxRequest.to.toLowerCase() !== router.options.address.toLowerCase()) {
             return false;
         }
 
         // S2: GaslessSwapTx.data is swapForGas(token, amountIn, amountOut, amountRepay, deadline).
         // TODO: Check if the function signature is for swapForGas
-
         const data = swapTxRequest.data.toString();
-        const inputData = "0x" + data.slice(10);
 
         const paramTypes = ['address', 'uint256', 'uint256', 'uint256', 'uint256'];
+        const inputData = "0x" + data.slice(10);
 
         let decodedParams: { [key: string]: unknown; __length__: number };
         let tokenData: string;
@@ -465,7 +462,7 @@ export async function isGaslessSwap(
 
         try {
             decodedParams = decodeParameters(paramTypes, inputData);
-
+            console.log(decodedParams);
             tokenData = decodedParams[0] as string;
             amountInData = (decodedParams[1] as bigint).toString();
             amountOutData = (decodedParams[2] as bigint).toString();
@@ -494,6 +491,7 @@ export async function isGaslessSwap(
             const approveTxRequest = await getTransactionRequest(approveTxOrNull);
 
             // SP1: GaslessApproveTx.to=token.
+            console.log(approveTxRequest.to?.toLowerCase(), tokenData.toLowerCase())
             if (approveTxRequest.to?.toLowerCase() !== tokenData.toLowerCase()) {
                 console.log("approveTxRequest.to?.toLowerCase() !== tokenData.toLowerCase()")
                 return false;

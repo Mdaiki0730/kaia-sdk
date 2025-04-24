@@ -40,6 +40,7 @@
         "lint:check": "eslint example src test --cache --quiet",
         "lint:fix": "eslint example src test --cache --fix",
         "test": "mocha test/**/*.ts",
+        "test:gasless": "mocha test/gasless.spec.ts --reporter-option maxDiffSize=0",
         "prepublishOnly": "npm run build"
     },
     "devDependencies": {
